@@ -1,0 +1,5 @@
+discordToken: "DISCORD_TOKEN"
+server: "IRC_HOST:IRC_TLS_PORT"
+nickname: "IRC_NICK"
+channels:
+  "DISCORD_CHANNEL_ID": "#IRC_CHANNEL"
