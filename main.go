@@ -45,8 +45,12 @@ var logErr = log.New(os.Stderr, "err:", log.LstdFlags)
 
 var ircClientLock sync.Mutex
 var ircClient *irc.Client
+var ircReady bool
 
 var discord *discordgo.Session
+
+var idIRCDiscord = make(map[string]string)
+var idDiscordIRC = make(map[string]string)
 
 func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
@@ -68,6 +72,7 @@ func main() {
 		logErr.Fatal(err)
 	}
 	discord.Identify.Intents = discordgo.IntentsAllWithoutPrivileged | discordgo.IntentsGuildMembers | discordgo.IntentMessageContent
+	discord.AddHandler(discordReady)
 	discord.AddHandler(discordMessage)
 	discord.AddHandler(discordReact)
 	discord.AddHandler(discordTyping)
@@ -98,6 +103,7 @@ func main() {
 }
 
 func ircLoop() error {
+	ircReady = false
 	tc, err := tls.Dial("tcp", cfg.Server, nil)
 	if err != nil {
 		return err
@@ -113,6 +119,7 @@ func ircLoop() error {
 		Handler:       irc.HandlerFunc(ircHandler),
 	})
 	c.CapRequest("message-tags", false)
+	c.CapRequest("echo-message", false)
 	if debug {
 		c.Writer.DebugCallback = func(line string) {
 			fmt.Printf(">>> %s\n", line)
@@ -156,6 +163,7 @@ func isDigit(s string, i int) bool {
 	return c >= '0' && c <= '9'
 }
 
+var patternMediaLink = regexp.MustCompile("^https?://[^\\s\\x01-\\x16]+\\.(?:jpg|jpeg|png|gif|mp4|webm)$")
 var patternURL = regexp.MustCompile("^(https?://[^\\s<]+[^<.,:;\"')\\]\\s])")
 
 func discordFormat(msg string) string {
@@ -270,7 +278,7 @@ func discordFormat(msg string) string {
 	return sb.String()
 }
 
-var patternMention = regexp.MustCompile("^@([^\\s#*_~`]+)(?:#(\\d+))")
+var patternMention = regexp.MustCompile("^@([^\\s#*_~`]+)#(\\d+)")
 var patternEmoji = regexp.MustCompile(":(\\w+):")
 
 func discordTransformPart(channel string, msg string) string {
@@ -347,17 +355,33 @@ func discordTransform(channel, msg string) string {
 	return sb.String()
 }
 
-func discordSend(channel string, msg string) {
+func discordSend(id string, channel string, msg string, replyID string) {
 	msg = discordFormat(msg)
 	msg = discordTransform(channel, msg)
 
-	discord.ChannelMessageSend(channel, msg)
+	dm := &discordgo.MessageSend{
+		Content: msg,
+	}
+	if replyID != "" {
+		dm.Reference = &discordgo.MessageReference{
+			MessageID: replyID,
+			ChannelID: channel,
+		}
+	}
+	m, err := discord.ChannelMessageSendComplex(channel, dm)
+	if err == nil && id != "" {
+		idIRCDiscord[id] = m.ID
+		idDiscordIRC[m.ID] = id
+	}
 }
 
 func ircHandler(c *irc.Client, m *irc.Message) {
-	if m.Prefix.Name == c.CurrentNick() {
+	if m.Name == c.CurrentNick() && m.Command != "PRIVMSG" {
 		return
 	}
+	msgID := string(m.Tags["msgid"])
+	replyID := idIRCDiscord[string(m.Tags["+draft/reply"])]
+	handled := true
 	switch m.Command {
 	case "001":
 		for _, ic := range cfg.Channels {
@@ -382,25 +406,40 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 				}
 			}
 		}
+		c.WriteMessage(&irc.Message{
+			Command: "PING",
+			Params:  []string{"ready"},
+		})
+	case "PONG":
+		if m.Params[len(m.Params)-1] == "ready" {
+			ircReady = true
+		}
+	default:
+		handled = false
+	}
+	if handled || !ircReady {
+		return
+	}
+	switch m.Command {
 	case "NICK":
 		for dc := range cfg.Channels {
-			discordSend(dc, fmt.Sprintf("%c%s%c is now known as %s", fItalics, m.Prefix.Name, fReset, m.Params[0]))
+			discordSend(msgID, dc, fmt.Sprintf("%c%s%c is now known as %s", fItalics, m.Prefix.Name, fReset, m.Params[0]), replyID)
 		}
 	case "JOIN":
 		dc := discordChannel(m.Params[0])
 		if dc == "" {
 			return
 		}
-		discordSend(dc, fmt.Sprintf("%c%s%c has joined the channel", fItalics, m.Prefix.Name, fReset))
+		discordSend(msgID, dc, fmt.Sprintf("%c%s%c has joined the channel", fItalics, m.Prefix.Name, fReset), replyID)
 	case "PART":
 		dc := discordChannel(m.Params[0])
 		if dc == "" {
 			return
 		}
 		if len(m.Params) > 1 {
-			discordSend(dc, fmt.Sprintf("%c%s%c has left the channel: %s", fItalics, m.Prefix.Name, fReset, m.Params[1]))
+			discordSend(msgID, dc, fmt.Sprintf("%c%s%c has left the channel: %s", fItalics, m.Prefix.Name, fReset, m.Params[1]), replyID)
 		} else {
-			discordSend(dc, fmt.Sprintf("%c%s%c has left the channel", fItalics, m.Prefix.Name, fReset))
+			discordSend(msgID, dc, fmt.Sprintf("%c%s%c has left the channel", fItalics, m.Prefix.Name, fReset), replyID)
 		}
 	case "KICK":
 		dc := discordChannel(m.Params[0])
@@ -408,16 +447,16 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 			return
 		}
 		if len(m.Params) > 2 {
-			discordSend(dc, fmt.Sprintf("%c%s%c was kicked off the channel by %s: %s", fItalics, m.Params[1], fReset, m.Prefix.Name, m.Params[2]))
+			discordSend(msgID, dc, fmt.Sprintf("%c%s%c was kicked off the channel by %s: %s", fItalics, m.Params[1], fReset, m.Prefix.Name, m.Params[2]), replyID)
 		} else {
-			discordSend(dc, fmt.Sprintf("%c%s%c was kicked off the channel by %s", fItalics, m.Params[1], fReset, m.Prefix.Name))
+			discordSend(msgID, dc, fmt.Sprintf("%c%s%c was kicked off the channel by %s", fItalics, m.Params[1], fReset, m.Prefix.Name), replyID)
 		}
 	case "QUIT":
 		for dc := range cfg.Channels {
 			if len(m.Params) > 0 {
-				discordSend(dc, fmt.Sprintf("%c%s%c has quit: %s", fItalics, m.Prefix.Name, fReset, m.Params[0]))
+				discordSend(msgID, dc, fmt.Sprintf("%c%s%c has quit: %s", fItalics, m.Prefix.Name, fReset, m.Params[0]), replyID)
 			} else {
-				discordSend(dc, fmt.Sprintf("%c%s%c has quit", fItalics, m.Prefix.Name, fReset))
+				discordSend(msgID, dc, fmt.Sprintf("%c%s%c has quit", fItalics, m.Prefix.Name, fReset), replyID)
 			}
 		}
 	case "TAGMSG":
@@ -433,7 +472,19 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 		if dc == "" {
 			return
 		}
+		if m.Name == c.CurrentNick() {
+			if discordID := string(m.Tags["+discord"]); discordID != "" {
+				idIRCDiscord[msgID] = discordID
+				if _, ok := idDiscordIRC[discordID]; !ok {
+					idDiscordIRC[discordID] = msgID
+				}
+			}
+			return
+		}
 		body := m.Params[1]
+		if replyID != "" {
+			body = strings.TrimPrefix(body, fmt.Sprintf("%s: ", c.CurrentNick()))
+		}
 		if body[0] == '\x01' {
 			body = strings.Trim(body[1:], "\x01")
 			verb, data, _ := strings.Cut(body, " ")
@@ -444,7 +495,13 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 			// a CTCP ACTION is sent as an italicized message
 			body = fmt.Sprintf("%c%s", fItalics, data)
 		}
-		discordSend(dc, fmt.Sprintf("%c<%s>%c %s", fBold, m.Prefix.Name, fReset, body))
+		if !strings.ContainsRune(body, ' ') && patternMediaLink.MatchString(body) {
+			// send image link in its own message so that it can be embedded by discord
+			discordSend("", dc, fmt.Sprintf("%c<%s>", fBold, m.Prefix.Name), replyID)
+			discordSend(msgID, dc, body, replyID)
+		} else {
+			discordSend(msgID, dc, fmt.Sprintf("%c<%s>%c %s", fBold, m.Prefix.Name, fReset, body), replyID)
+		}
 	case "NOTICE":
 		// intentionally not passed through
 	}
@@ -584,6 +641,12 @@ func discordIRCFormat(s *discordgo.Session, guildID string, m string) string {
 	return sb.String()
 }
 
+func discordReady(s *discordgo.Session, m *discordgo.Ready) {
+	for _, g := range s.State.Guilds {
+		s.RequestGuildMembers(g.ID, "", 0, "", false)
+	}
+}
+
 func discordMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
@@ -591,6 +654,10 @@ func discordMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	ic, ok := cfg.Channels[m.ChannelID]
 	if !ok {
 		return
+	}
+	replyID := ""
+	if m.MessageReference != nil {
+		replyID = idDiscordIRC[m.MessageReference.MessageID]
 	}
 
 	colorCode := discord.State.MessageColor(m.Message)
@@ -621,12 +688,20 @@ func discordMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		body = replacerNewline.Replace(body)
 
 		ircWrite(&irc.Message{
+			Tags: irc.Tags{
+				"+discord":     irc.TagValue(m.ID),
+				"+draft/reply": irc.TagValue(replyID),
+			},
 			Command: "PRIVMSG",
 			Params:  []string{ic, prefix + body},
 		})
 	}
 	for _, attachment := range m.Attachments {
 		ircWrite(&irc.Message{
+			Tags: irc.Tags{
+				"+discord":     irc.TagValue(m.ID),
+				"+draft/reply": irc.TagValue(replyID),
+			},
 			Command: "PRIVMSG",
 			Params:  []string{ic, prefix + attachment.URL},
 		})
