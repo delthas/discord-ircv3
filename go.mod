@@ -3,7 +3,7 @@ module github.com/delthas/discord-ircv3
 go 1.18
 
 require (
-	github.com/bwmarrin/discordgo v0.25.0
+	github.com/bwmarrin/discordgo v0.27.1
 	github.com/delthas/discord-formatting v0.0.0-20220730152124-232054d9d66b
 	gopkg.in/irc.v3 v3.1.4
 	gopkg.in/yaml.v2 v2.2.8
