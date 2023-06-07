@@ -29,7 +29,7 @@ https://discord.com/oauth2/authorize?permissions=274878024704&scope=bot&client_i
 
 ## Usage
 
-Copy and edit `config.yaml.example` into `config.yaml`:
+Copy and edit [`config.yaml.example`](config.yaml.example) into `config.yaml`:
 - The `discordToken` is the Bot token obtained from the previous step
 - The Discord channel IDs can be obtained after "Developer Mode" is enabled in your user settings in the "Advanced" page, by right-clicking channels and selecting "Copy Channel ID"
 
