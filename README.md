@@ -21,7 +21,7 @@ go install github.com/delthas/discord-ircv3@master
 - Create a [Discord app](https://discord.com/developers/docs/getting-started)
 - In your bot page, enable the "Server Members Intent" and "Message Content Intent" intents, under "Privileged Gateway Intents"
 - Get your application OAuth2 Client ID from the application OAuth2 page
-- Add the bot to all your servers by opening the following URL:
+- Add the bot to all your servers by opening the following URL, replacing the Client ID with your Client ID:
 ```
 https://discord.com/oauth2/authorize?permissions=274878024704&scope=bot&client_id=<YOUR_APPLICATION_OAUTH2_CLIENT_ID>
 ```
