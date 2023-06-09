@@ -49,8 +49,8 @@ var ircReady bool
 
 var discord *discordgo.Session
 
-var idIRCDiscord = make(map[string]string)
-var idDiscordIRC = make(map[string]string)
+var idIRCDiscord = make(map[string][]string)
+var idDiscordIRC = make(map[string][]string)
 
 func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
@@ -74,6 +74,7 @@ func main() {
 	discord.Identify.Intents = discordgo.IntentsAllWithoutPrivileged | discordgo.IntentsGuildMembers | discordgo.IntentMessageContent
 	discord.AddHandler(discordReady)
 	discord.AddHandler(discordMessage)
+	discord.AddHandler(discordDelete)
 	discord.AddHandler(discordReact)
 	discord.AddHandler(discordTyping)
 
@@ -120,6 +121,7 @@ func ircLoop() error {
 	})
 	c.CapRequest("message-tags", false)
 	c.CapRequest("echo-message", false)
+	c.CapRequest("draft/message-redaction", false)
 	if debug {
 		c.Writer.DebugCallback = func(line string) {
 			fmt.Printf(">>> %s\n", line)
@@ -133,10 +135,14 @@ func ircLoop() error {
 
 func ircWrite(m *irc.Message) {
 	ircClientLock.Lock()
-	if ircClient != nil {
-		ircClient.WriteMessage(m)
+	defer ircClientLock.Unlock()
+	if ircClient == nil {
+		return
 	}
-	ircClientLock.Unlock()
+	if m.Command == "REDACT" && !ircClient.CapEnabled("draft/message-redaction") {
+		return
+	}
+	ircClient.WriteMessage(m)
 }
 
 func discordChannel(irc string) string {
@@ -370,8 +376,8 @@ func discordSend(id string, channel string, msg string, replyID string) {
 	}
 	m, err := discord.ChannelMessageSendComplex(channel, dm)
 	if err == nil && id != "" {
-		idIRCDiscord[id] = m.ID
-		idDiscordIRC[m.ID] = id
+		idIRCDiscord[id] = append(idIRCDiscord[id], m.ID)
+		idDiscordIRC[m.ID] = append(idIRCDiscord[id], id)
 	}
 }
 
@@ -380,7 +386,10 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 		return
 	}
 	msgID := string(m.Tags["msgid"])
-	replyID := idIRCDiscord[string(m.Tags["+draft/reply"])]
+	var replyID string
+	if ids := idIRCDiscord[string(m.Tags["+draft/reply"])]; len(ids) > 0 {
+		replyID = ids[len(ids)-1]
+	}
 	handled := true
 	switch m.Command {
 	case "001":
@@ -459,6 +468,15 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 				discordSend(msgID, dc, fmt.Sprintf("%c%s%c has quit", fItalics, m.Prefix.Name, fReset), replyID)
 			}
 		}
+	case "REDACT":
+		dc := discordChannel(m.Params[0])
+		if dc == "" {
+			return
+		}
+		ids := idIRCDiscord[m.Params[1]]
+		for _, id := range ids {
+			discord.ChannelMessageDelete(dc, id)
+		}
 	case "TAGMSG":
 		dc := discordChannel(m.Params[0])
 		if dc == "" {
@@ -474,10 +492,8 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 		}
 		if m.Name == c.CurrentNick() {
 			if discordID := string(m.Tags["+discord"]); discordID != "" {
-				idIRCDiscord[msgID] = discordID
-				if _, ok := idDiscordIRC[discordID]; !ok {
-					idDiscordIRC[discordID] = msgID
-				}
+				idIRCDiscord[msgID] = append(idIRCDiscord[msgID], discordID)
+				idDiscordIRC[discordID] = append(idDiscordIRC[discordID], msgID)
 			}
 			return
 		}
@@ -657,7 +673,9 @@ func discordMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	replyID := ""
 	if m.MessageReference != nil {
-		replyID = idDiscordIRC[m.MessageReference.MessageID]
+		if ids := idDiscordIRC[m.MessageReference.MessageID]; len(ids) > 0 {
+			replyID = ids[0]
+		}
 	}
 
 	colorCode := discord.State.MessageColor(m.Message)
@@ -704,6 +722,23 @@ func discordMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			},
 			Command: "PRIVMSG",
 			Params:  []string{ic, prefix + attachment.URL},
+		})
+	}
+}
+
+func discordDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
+	if m.Author.ID == s.State.User.ID {
+		return
+	}
+	ic, ok := cfg.Channels[m.ChannelID]
+	if !ok {
+		return
+	}
+
+	for _, id := range idDiscordIRC[m.ID] {
+		ircWrite(&irc.Message{
+			Command: "REDACT",
+			Params:  []string{ic, id},
 		})
 	}
 }
