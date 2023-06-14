@@ -727,7 +727,8 @@ func discordMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 }
 
 func discordDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
-	if m.Author.ID == s.State.User.ID {
+	// Discord seems to omit the Author in message deletion notifications
+	if m.Author != nil && m.Author.ID == s.State.User.ID {
 		return
 	}
 	ic, ok := cfg.Channels[m.ChannelID]
