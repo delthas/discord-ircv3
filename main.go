@@ -377,7 +377,7 @@ func discordSend(id string, channel string, msg string, replyID string) {
 	m, err := discord.ChannelMessageSendComplex(channel, dm)
 	if err == nil && id != "" {
 		idIRCDiscord[id] = append(idIRCDiscord[id], m.ID)
-		idDiscordIRC[m.ID] = append(idIRCDiscord[id], id)
+		idDiscordIRC[m.ID] = append(idIRCDiscord[m.ID], id)
 	}
 }
 
