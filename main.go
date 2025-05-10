@@ -4,10 +4,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"github.com/bwmarrin/discordgo"
-	formatting "github.com/delthas/discord-formatting"
-	"gopkg.in/irc.v3"
-	"gopkg.in/yaml.v2"
 	"hash/fnv"
 	"log"
 	"os"
@@ -17,6 +13,11 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/bwmarrin/discordgo"
+	formatting "github.com/delthas/discord-formatting"
+	"gopkg.in/irc.v3"
+	"gopkg.in/yaml.v2"
 )
 
 const (
