@@ -756,9 +756,16 @@ func discordReact(s *discordgo.Session, m *discordgo.MessageReactionAdd) {
 	if reaction == "" {
 		return
 	}
+	replyID := ""
+	if ids := idDiscordIRC[m.MessageID]; len(ids) > 0 {
+		replyID = ids[0]
+	} else {
+		return
+	}
 	ircWrite(&irc.Message{
 		Tags: irc.Tags{
 			"+draft/react": irc.TagValue(reaction),
+			"+draft/reply": irc.TagValue(replyID),
 		},
 		Command: "TAGMSG",
 		Params:  []string{ic},
