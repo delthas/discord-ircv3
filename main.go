@@ -486,6 +486,9 @@ func ircHandler(c *irc.Client, m *irc.Message) {
 		if string(m.Tags["+typing"]) == "active" {
 			discord.ChannelTyping(dc)
 		}
+		if react := string(m.Tags["+draft/react"]); react != "" {
+			discord.MessageReactionAdd(dc, replyID, react)
+		}
 	case "PRIVMSG":
 		dc := discordChannel(m.Params[0])
 		if dc == "" {
